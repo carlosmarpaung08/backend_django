@@ -38,12 +38,20 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
-    'api',
+    'api',  # Aplikasi api untuk model CustomUser
     'corsheaders',
 ]
 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ),
+}
+
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # Tambahkan ini di urutan pertama
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -79,8 +87,12 @@ WSGI_APPLICATION = 'backend_python.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',  # Nama database
+        'USER': 'postgres.ulavewimyayczankyway',  # Diambil dari connection string
+        'PASSWORD': 'Pisces123',  # Ganti dengan password Anda yang sesuai
+        'HOST': 'aws-0-ap-southeast-1.pooler.supabase.com',  # Host Supabase
+        'PORT': '6543',  # Port database
     }
 }
 
@@ -121,9 +133,103 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
 # Mengizinkan semua domain selama pengembangan
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    "https://8954-103-121-134-223.ngrok-free.app",  # Frontend Anda
+    "http://localhost:3000",  # React dev server
+]
+
+# Jika Anda ingin mendukung kredensial seperti cookies atau otentikasi, aktifkan ini
+CORS_ALLOW_CREDENTIALS = True
+
+# Menyertakan semua header dalam permintaan
+CORS_ALLOW_HEADERS = [
+    'accept', 
+    'accept-encoding', 
+    'authorization', 
+    'content-type', 
+    'dnt', 
+    'origin', 
+    'user-agent', 
+    'x-csrftoken', 
+    'x-requested-with'
+]
+
+# Menambahkan lebih banyak pengaturan sesuai kebutuhan Anda
+CORS_EXPOSE_HEADERS = [
+    'content-type', 
+    'x-csrftoken', 
+    'authorization'
+]
+
+# Jika Anda ingin mendukung preflight request (OPTIONS request) selama 24 jam
+CORS_PREFLIGHT_MAX_AGE = 86400  # 24 hours in seconds
+
+# Ganti model pengguna default dengan model pengguna kustom yang sudah dibuat
+AUTH_USER_MODEL = 'api.CustomUser'
+
+
+# Pengaturan untuk media files (gambar profil dan lainnya)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Authentication backends
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+# JWT Settings
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+    
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+    'JTI_CLAIM': 'jti',
+    
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+}
+
+# Update REST_FRAMEWORK settings
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ),
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+        'rest_framework.parsers.FormParser',
+        'rest_framework.parsers.MultiPartParser',
+    ],
+}
+
+# Development settings (karena DEBUG = True)
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
+
+# Security settings yang aman untuk development
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+
+# Session settings
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SESSION_COOKIE_AGE = 1209600  # 2 weeks
