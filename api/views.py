@@ -9,11 +9,14 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from .models import CustomUser
+from .models import UserBookRecommendation
+from django.utils.timezone import now
 from .serializers import CustomUserSerializer  # Import serializer
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated
+from django.contrib.auth import get_user_model
 import os
 
 # Menentukan path relatif ke file model dan tokenizer
@@ -150,6 +153,9 @@ class RecommendBooksView(APIView):
             book['preview_link'] = self.get_preview_link(book['title'])  # Menambahkan preview_link
             book['description'] = book.get('description', 'No description available')
 
+            # Menyimpan rekomendasi buku ke dalam database
+            self.save_recommendation(request.user, book, score)
+
         result = [{"title": book["title"], "author": book["author"], "description": book["description"],
                    "categories": book["categories"], "score": book["score"], "thumbnail": book.get('thumbnail'),
                    "preview_link": book["preview_link"]} for book, score in recommended_books]
@@ -186,6 +192,26 @@ class RecommendBooksView(APIView):
                 return data['items'][0]['volumeInfo'].get('previewLink', 'No preview available')
         return 'No preview available'  # Jika tidak ada previewLink ditemukan, kembalikan default
 
+    def save_recommendation(self, user, book, score):
+        """ Menyimpan rekomendasi buku ke dalam database """
+        # Pastikan hanya satu rekomendasi buku per user untuk setiap judul buku
+        recommendation, created = UserBookRecommendation.objects.get_or_create(
+            user=user,
+            book_title=book['title'],
+            defaults={
+                'author': book['author'],
+                'description': book['description'],
+                'thumbnail': book['thumbnail'],
+                'preview_link': book['preview_link'],  # Menyimpan preview_link
+                'score': score,
+            }
+        )
+        # Jika rekomendasi sudah ada, update jika perlu
+        if not created:
+            recommendation.score = score
+            recommendation.preview_link = book['preview_link']  # Update preview_link jika ada perubahan
+            recommendation.save()
+
 # Fungsi untuk mengambil data buku dari Google Books API
 def fetch_books(query):
     API_URL = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5"
@@ -194,3 +220,28 @@ def fetch_books(query):
         data = response.json()
         return [{'title': item["volumeInfo"]["title"], 'description': item["volumeInfo"].get("description", ""), 'categories': item["volumeInfo"].get("categories", [])} for item in data.get('items', [])]
     return []
+
+class UserRecommendationsView(APIView):
+    permission_classes = [IsAuthenticated]  # Pastikan hanya user yang terautentikasi yang bisa mengakses
+
+    def get(self, request):
+        # Mengambil user yang sedang login
+        user = request.user  
+
+        # Ambil rekomendasi buku untuk user yang sedang login, urutkan berdasarkan waktu pembuatan
+        recommendations = UserBookRecommendation.objects.filter(user=user).order_by('-created_at')
+
+        # Format rekomendasi menjadi response
+        result = [
+            {
+                'title': rec.book_title,
+                'author': rec.author,
+                'description': rec.description,
+                'thumbnail': rec.thumbnail,
+                'score': rec.score,
+                'created_at': rec.created_at,  # Menambahkan waktu pembuatan (opsional)
+            }
+            for rec in recommendations
+        ]
+
+        return Response(result, status=200)
