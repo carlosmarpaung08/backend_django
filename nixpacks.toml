@@ -2,7 +2,7 @@
 nixPkgs = ["python310", "python310Packages.pip", "python310Packages.setuptools", "gcc"]
 
 [phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+cmds = ["python -m pip install -r requirements.txt"]
 
-[start]
-cmd = "gunicorn backend_phyton.wsgi"
+[phases.setup.env]
+PYTHONUNBUFFERED = "1"
