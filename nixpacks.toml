@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python310", "python310Packages.pip", "python310Packages.setuptools", "gcc"]
+
+[phases.install]
+cmds = ["python -m pip install -r requirements.txt"]
+
+[phases.setup.env]
+PYTHONUNBUFFERED = "1"
