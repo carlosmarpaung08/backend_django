@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import CustomUser
+from .models import UserBookRecommendation
 
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -14,3 +15,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             user.set_password(password)
         user.save()
         return user
+    
+class UserBookRecommendationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserBookRecommendation
+        fields = '__all__'

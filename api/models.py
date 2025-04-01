@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.conf import settings
 
 class CustomUser(AbstractUser):
     email = models.EmailField(unique=True)
@@ -11,42 +12,16 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return self.email
-
-class Book(models.Model):
-    google_book_id = models.CharField(max_length=100, unique=True)
-    title = models.CharField(max_length=255)
-    authors = models.TextField(null=True, blank=True)
-    published_date = models.CharField(max_length=50, null=True, blank=True)
+    
+class UserBookRecommendation(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='book_recommendations')
+    book_title = models.CharField(max_length=255)
+    author = models.CharField(max_length=255, null=True, blank=True)
     description = models.TextField(null=True, blank=True)
-    page_count = models.IntegerField(null=True, blank=True)
-    categories = models.TextField(null=True, blank=True)
-    thumbnail = models.URLField(max_length=255, null=True, blank=True)
-    preview_link = models.URLField(max_length=255, null=True, blank=True)
-    average_rating = models.FloatField(default=0)
+    thumbnail = models.URLField(max_length=500, null=True, blank=True)
+    score = models.FloatField(default=0)
+    preview_link = models.URLField(max_length=500, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.title
-
-class Rating(models.Model):
-    RATING_CHOICES = [
-        (1, '1 Star'),
-        (2, '2 Stars'),
-        (3, '3 Stars'),
-        (4, '4 Stars'),
-        (5, '5 Stars'),
-    ]
-
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='ratings')
-    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='ratings')
-    rating = models.IntegerField(choices=RATING_CHOICES)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ('user', 'book')  # Memastikan user hanya bisa memberi satu rating per buku
-        ordering = ['-created_at']  # Mengurutkan berdasarkan yang terbaru
-
-    def __str__(self):
-        return f"{self.user.email} rated {self.book.title}: {self.rating} stars"
+        return f"{self.book_title} → {self.user.username}"

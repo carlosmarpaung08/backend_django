@@ -9,11 +9,14 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from .models import CustomUser
-from .serializers import CustomUserSerializer  # Import serializer
+from .serializers import CustomUserSerializer
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
+from .models import UserBookRecommendation
+from .serializers import UserBookRecommendationSerializer
 from rest_framework.permissions import IsAuthenticated
+from django.db import IntegrityError
 import os
 
 # Menentukan path relatif ke file model dan tokenizer
@@ -108,6 +111,7 @@ class BookSearchView(APIView):
 
 # Menambahkan View untuk Rekomendasi Buku
 class RecommendBooksView(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request):
         input_text = request.query_params.get('input_text', '')
         if not input_text:
@@ -153,7 +157,23 @@ class RecommendBooksView(APIView):
         result = [{"title": book["title"], "author": book["author"], "description": book["description"],
                    "categories": book["categories"], "score": book["score"], "thumbnail": book.get('thumbnail'),
                    "preview_link": book["preview_link"]} for book, score in recommended_books]
-        
+       # Simpan hasil rekomendasi ke database (jika belum ada)
+        for book, score in recommended_books:
+            try:
+                UserBookRecommendation.objects.get_or_create(
+                    user=request.user,
+                    book_title=book.get("title", "Untitled"),
+                    defaults={
+                        'author': book.get("author", "Unknown Author"),
+                        'description': book.get("description", ""),
+                        'thumbnail': book.get("thumbnail", ""),
+                        'score': score,
+                        'preview_link': book.get("preview_link", "")
+                    }
+                )
+            except IntegrityError as e:
+                print(f"Gagal menyimpan: {e}")
+
         return Response(result, status=status.HTTP_200_OK)
 
     def get_thumbnail(self, title):
@@ -194,3 +214,22 @@ def fetch_books(query):
         data = response.json()
         return [{'title': item["volumeInfo"]["title"], 'description': item["volumeInfo"].get("description", ""), 'categories': item["volumeInfo"].get("categories", [])} for item in data.get('items', [])]
     return []
+
+class UserBookRecommendationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Ambil semua rekomendasi milik user yang sedang login"""
+        recommendations = UserBookRecommendation.objects.filter(user=request.user)
+        serializer = UserBookRecommendationSerializer(recommendations, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        """Simpan rekomendasi baru untuk user"""
+        data = request.data.copy()
+        data['user'] = request.user.id  # Isi field user dari request
+        serializer = UserBookRecommendationSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
