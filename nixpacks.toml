@@ -1,8 +1,11 @@
 [phases.setup]
-nixPkgs = ["python310", "python310Packages.pip", "python310Packages.setuptools", "gcc"]
+nixPkgs = ["python310", "gcc"]
 
 [phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+cmds = ["python -m venv .venv", ". .venv/bin/activate", "pip install -r requirements.txt"]
+
+[phases.build]
+cmds = ["pip install --upgrade pip"]
 
 [start]
 cmd = "gunicorn backend_phyton.wsgi"
