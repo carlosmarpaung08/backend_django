@@ -2,37 +2,46 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 import requests
-import json
 import numpy as np
-import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-from .models import CustomUser
-from .serializers import CustomUserSerializer
+from .models import CustomUser, ReadingHistory
+from .serializers import CustomUserSerializer, ReadingHistorySerializer
 from django.contrib.auth.hashers import make_password
-from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import UserBookRecommendation
-from .serializers import UserBookRecommendationSerializer
 from rest_framework.permissions import IsAuthenticated
-from django.db import IntegrityError
 import os
 
-# Menentukan path relatif ke file model dan tokenizer
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Mendapatkan direktori file views.py
-model_path = os.path.join(BASE_DIR, 'models', 'lstm_model.h5')  # Path ke model
-tokenizer_path = os.path.join(BASE_DIR, 'models', 'tokenizer.json')  # Path ke tokenizer
+# Path relatif model dan tokenizer
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(BASE_DIR, 'models', 'autoencoder_unsupervised.h5')
+tokenizer_path = os.path.join(BASE_DIR, 'models', 'tokenizer.json')
 
-# Memuat model dan tokenizer
+# Load model & tokenizer
 model = load_model(model_path)
 with open(tokenizer_path, 'r') as f:
     tokenizer_data = f.read()
 tokenizer = tokenizer_from_json(tokenizer_data)
 
-MAX_SEQ_LEN = 100  # Sequence length used by the model
+MAX_SEQ_LEN = 100
 
-# Fungsi Registrasi Pengguna Baru
+# === Utility function ===
+API_KEY = "AIzaSyA9bUaNLlFeSWw_H9sFjpejBDCLlOmIxxA"
+
+def fetch_books(query):
+    url = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5&key={API_KEY}"
+    res = requests.get(url)
+    if res.status_code == 200:
+        data = res.json()
+        return [{
+            'title': item["volumeInfo"].get("title", ""),
+            'description': item["volumeInfo"].get("description", ""),
+            'categories': item["volumeInfo"].get("categories", [])
+        } for item in data.get('items', [])]
+    return []
+
+# === Register ===
 class RegisterUserView(APIView):
     def post(self, request):
         serializer = CustomUserSerializer(data=request.data)
@@ -48,21 +57,17 @@ class RegisterUserView(APIView):
                     }
                 }, status=status.HTTP_201_CREATED)
             except Exception as e:
-                return Response({
-                    'error': str(e)
-                }, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-# Fungsi Login Pengguna
+# === Login ===
 class LoginUserView(APIView):
     def post(self, request):
         email = request.data.get('email')
         password = request.data.get('password')
-        
+
         if not email or not password:
-            return Response({
-                'error': 'Please provide both email and password'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Please provide both email and password'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             user = CustomUser.objects.get(email=email)
@@ -78,22 +83,18 @@ class LoginUserView(APIView):
                     }
                 }, status=status.HTTP_200_OK)
             else:
-                return Response({
-                    'error': 'Invalid credentials'
-                }, status=status.HTTP_401_UNAUTHORIZED)
+                return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
         except CustomUser.DoesNotExist:
-            return Response({
-                'error': 'User does not exist'
-            }, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'User does not exist'}, status=status.HTTP_404_NOT_FOUND)
 
-# Fungsi Pencarian Buku di Google Books API
+# === Book Search ===
 class BookSearchView(APIView):
     def get(self, request):
         query = request.query_params.get('q', '')
-        max_results = 40  # Maksimal jumlah hasil per halaman
-        start_index = int(request.query_params.get('startIndex', 0))  # Indeks awal untuk pagination
-        google_books_url = f'https://www.googleapis.com/books/v1/volumes?q={query}&maxResults={max_results}&startIndex={start_index}'
-        response = requests.get(google_books_url)
+        max_results = 40
+        start_index = int(request.query_params.get('startIndex', 0))
+        url = f'https://www.googleapis.com/books/v1/volumes?q={query}&maxResults={max_results}&startIndex={start_index}&key={API_KEY}'
+        response = requests.get(url)
 
         if response.status_code == 200:
             books = []
@@ -101,135 +102,125 @@ class BookSearchView(APIView):
                 books.append({
                     'title': item['volumeInfo'].get('title', ''),
                     'author': ', '.join(item['volumeInfo'].get('authors', [])),
-                    'description': item['volumeInfo'].get('description', ''),   
+                    'description': item['volumeInfo'].get('description', ''),
                     'thumbnail': item['volumeInfo'].get('imageLinks', {}).get('thumbnail', ''),
-                    'preview_link': item['volumeInfo'].get('previewLink', ''),
+                    'preview_link': item['volumeInfo'].get('previewLink', '')
                 })
-            print("Books to send:", books)  # Tambahkan log ini
             return Response(books, status=status.HTTP_200_OK)
         return Response({'error': 'Unable to fetch data'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# Menambahkan View untuk Rekomendasi Buku
+# === Recommendation View ===
 class RecommendBooksView(APIView):
     permission_classes = [IsAuthenticated]
+
     def get(self, request):
-        input_text = request.query_params.get('input_text', '')
-        if not input_text:
-            return Response({'error': 'Input text is required'}, status=status.HTTP_400_BAD_REQUEST)
+        histories = ReadingHistory.objects.filter(user=request.user).order_by('-clicked_at')[:3]
+        if not histories:
+            return Response({'error': 'Belum ada riwayat bacaan'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Ambil data buku dari API Google Books
-        books = fetch_books(input_text)
+        input_texts = [h.book_title for h in histories]
+        input_embeddings = []
+
+        for text in input_texts:
+            seq = tokenizer.texts_to_sequences([text])
+            padded = pad_sequences(seq, maxlen=MAX_SEQ_LEN)
+            embedding = model.predict(padded)
+            input_embeddings.append(embedding[0])
+
+        avg_embedding = np.mean(input_embeddings, axis=0)
+
+        # Ambil buku dari semua riwayat pencarian
+        books = []
+        for text in input_texts:
+            books.extend(fetch_books(text))
+
         if not books:
-            return Response({'error': 'No books found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Tidak ada buku ditemukan dari Google Books API'}, status=status.HTTP_404_NOT_FOUND)
 
-        descriptions = [book['description'] for book in books if book['description']]
+        descriptions = [b["description"] for b in books if b.get("description")]
         if not descriptions:
-            return Response({'error': 'No book descriptions found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Tidak ada deskripsi buku'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Tokenisasi dan padding input
         book_sequences = tokenizer.texts_to_sequences(descriptions)
         book_padded = pad_sequences(book_sequences, maxlen=MAX_SEQ_LEN)
-
-        input_seq = tokenizer.texts_to_sequences([input_text])
-        input_padded = pad_sequences(input_seq, maxlen=MAX_SEQ_LEN)
-
-        # Prediksi embedding untuk input dan buku
-        input_embedding = model.predict(input_padded)
         book_embeddings = model.predict(book_padded)
 
-        # Menghitung kemiripan antara input dan buku
-        similarity_scores = np.dot(book_embeddings, input_embedding.T).flatten()
+        similarity_scores = np.dot(book_embeddings, avg_embedding.T).flatten()
 
-        # Mengurutkan berdasarkan skor kemiripan
-        recommended_books = sorted(zip(books, similarity_scores), key=lambda x: x[1], reverse=True)[:5]
+        # Menghindari duplikasi buku berdasarkan judul
+        unique_books = {}
+        for book, score in zip(books, similarity_scores):
+            if book["title"] not in unique_books:
+                unique_books[book["title"]] = {
+                    "title": book["title"],
+                    "author": book["author"],
+                    "description": book["description"],
+                    "categories": book.get("categories", []),
+                    "score": score,
+                    "thumbnail": book["thumbnail"],
+                    "preview_link": book["preview_link"]
+                }
 
-        # Menambahkan data lengkap dari Google Books API (author, description, thumbnail, preview_link)
-        for book, score in recommended_books:
-            book['score'] = score  # Menambahkan skor ke data buku
-            # Cek apakah thumbnail tersedia dari Google Books API
-            thumbnail = self.get_thumbnail(book['title'])
-            book['thumbnail'] = thumbnail  # Menambahkan thumbnail ke data buku
-            # Ambil author, description, preview_link
-            book['author'] = self.get_author(book['title'])  # Ambil author menggunakan fungsi get_author
-            book['preview_link'] = self.get_preview_link(book['title'])  # Menambahkan preview_link
-            book['description'] = book.get('description', 'No description available')
+        # Urutkan berdasarkan score
+        recommended_books = sorted(unique_books.values(), key=lambda x: x['score'], reverse=True)[:15]
 
-        result = [{"title": book["title"], "author": book["author"], "description": book["description"],
-                   "categories": book["categories"], "score": book["score"], "thumbnail": book.get('thumbnail'),
-                   "preview_link": book["preview_link"]} for book, score in recommended_books]
-       # Simpan hasil rekomendasi ke database (jika belum ada)
-        for book, score in recommended_books:
-            try:
-                UserBookRecommendation.objects.get_or_create(
-                    user=request.user,
-                    book_title=book.get("title", "Untitled"),
-                    defaults={
-                        'author': book.get("author", "Unknown Author"),
-                        'description': book.get("description", ""),
-                        'thumbnail': book.get("thumbnail", ""),
-                        'score': score,
-                        'preview_link': book.get("preview_link", "")
-                    }
-                )
-            except IntegrityError as e:
-                print(f"Gagal menyimpan: {e}")
-
-        return Response(result, status=status.HTTP_200_OK)
+        # Kirim hasil rekomendasi yang sudah disaring
+        return Response(recommended_books, status=status.HTTP_200_OK)
 
     def get_thumbnail(self, title):
-        """ Mengambil thumbnail dari Google Books API berdasarkan judul buku """
-        google_books_url = f"https://www.googleapis.com/books/v1/volumes?q={title}&maxResults=1"
-        response = requests.get(google_books_url)
-        if response.status_code == 200:
-            data = response.json()
+        url = f"https://www.googleapis.com/books/v1/volumes?q={title}&maxResults=1"
+        res = requests.get(url)
+        if res.status_code == 200:
+            data = res.json()
             if 'items' in data:
                 return data['items'][0]['volumeInfo'].get('imageLinks', {}).get('thumbnail', '')
-        return ''  # Return empty string if no thumbnail found
+        return ''
 
     def get_author(self, title):
-        """ Mengambil author dari Google Books API berdasarkan judul buku """
-        google_books_url = f"https://www.googleapis.com/books/v1/volumes?q={title}&maxResults=1"
-        response = requests.get(google_books_url)
-        if response.status_code == 200:
-            data = response.json()
+        url = f"https://www.googleapis.com/books/v1/volumes?q={title}&maxResults=1"
+        res = requests.get(url)
+        if res.status_code == 200:
+            data = res.json()
             if 'items' in data:
-                return data['items'][0]['volumeInfo'].get('authors', ['Unknown Author'])[0]  # Ambil author pertama
-        return 'Unknown Author'  # Jika tidak ada author ditemukan, kembalikan default 'Unknown Author'
+                return data['items'][0]['volumeInfo'].get('authors', ['Unknown Author'])[0]
+        return 'Unknown Author'
 
     def get_preview_link(self, title):
-        """ Mengambil previewLink dari Google Books API berdasarkan judul buku """
-        google_books_url = f"https://www.googleapis.com/books/v1/volumes?q={title}&maxResults=1"
-        response = requests.get(google_books_url)
-        if response.status_code == 200:
-            data = response.json()
+        url = f"https://www.googleapis.com/books/v1/volumes?q={title}&maxResults=1"
+        res = requests.get(url)
+        if res.status_code == 200:
+            data = res.json()
             if 'items' in data:
                 return data['items'][0]['volumeInfo'].get('previewLink', 'No preview available')
-        return 'No preview available'  # Jika tidak ada previewLink ditemukan, kembalikan default
+        return 'No preview available'
 
-# Fungsi untuk mengambil data buku dari Google Books API
-def fetch_books(query):
-    API_URL = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5"
-    response = requests.get(API_URL)
-    if response.status_code == 200:
-        data = response.json()
-        return [{'title': item["volumeInfo"]["title"], 'description': item["volumeInfo"].get("description", ""), 'categories': item["volumeInfo"].get("categories", [])} for item in data.get('items', [])]
-    return []
+# === Refresh Token ===
+class RefreshAccessTokenView(APIView):
+    def post(self, request):
+        refresh_token = request.data.get('refresh')
+        if not refresh_token:
+            return Response({'error': 'Refresh token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-class UserBookRecommendationView(APIView):
+        try:
+            refresh = RefreshToken(refresh_token)
+            new_access_token = str(refresh.access_token)
+            return Response({'access': new_access_token}, status=status.HTTP_200_OK)
+        except Exception:
+            return Response({'error': 'Invalid refresh token'}, status=status.HTTP_400_BAD_REQUEST)
+
+# === Reading History View ===
+class ReadingHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        """Ambil semua rekomendasi milik user yang sedang login"""
-        recommendations = UserBookRecommendation.objects.filter(user=request.user)
-        serializer = UserBookRecommendationSerializer(recommendations, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
     def post(self, request):
-        """Simpan rekomendasi baru untuk user"""
-        data = request.data.copy()
-        data['user'] = request.user.id  # Isi field user dari request
-        serializer = UserBookRecommendationSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        title = request.data.get('book_title')
+        if not title:
+            return Response({'error': 'Book title is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        ReadingHistory.objects.create(user=request.user, book_title=title)
+        return Response({'message': 'Reading history saved'}, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        histories = ReadingHistory.objects.filter(user=request.user).order_by('-clicked_at')
+        serializer = ReadingHistorySerializer(histories, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)

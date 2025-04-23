@@ -6,7 +6,8 @@ from .views import (
     RegisterUserView,
     LoginUserView,
     RecommendBooksView,
-    UserBookRecommendationView  # ✅ tambahkan ini
+    RefreshAccessTokenView,
+    ReadingHistoryView, 
 )
 
 urlpatterns = [
@@ -14,5 +15,6 @@ urlpatterns = [
     path('register/', RegisterUserView.as_view(), name='register'),
     path('login/', LoginUserView.as_view(), name='login'),
     path('recommend/', RecommendBooksView.as_view(), name='recommend-books'),
-    path('user-recommendations/', UserBookRecommendationView.as_view(), name='user-recommendations'),  # ✅ tambahkan ini
+    path('history/', ReadingHistoryView.as_view(), name='reading-history'),
+    path('token/refresh/', RefreshAccessTokenView.as_view(), name='refresh-token'),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
